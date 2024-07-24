@@ -17,6 +17,7 @@ from gensim.models.phrases import Phraser
 from gensim.models import Phrases
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, f1_score
+import os
 
 # Load the data 
 ds = pd.read_csv('job_Data_Scientist_VietNam.csv')
@@ -86,6 +87,26 @@ def visualize_word_count(df):
     plt.axis('off')
     plt.show()
 
+# Function to plot results and save images
+def plot_results(results_df, metric, save_dir='plots'):
+    # Create directory if it doesn't exist
+    if not os.path.exists(save_dir):
+        os.makedirs(save_dir)
+    
+    for param in param_grid:
+        plt.figure(figsize=(10, 6))
+        for value in results_df[param].unique():
+            subset = results_df[results_df[param] == value]
+            plt.plot(subset.index, subset[metric], marker='o', label=f'{param}={value}')
+        plt.title(f'Effect of {param} on {metric}')
+        plt.xlabel('Experiment Index')
+        plt.ylabel(metric)
+        plt.legend()
+        
+        # Save the plot
+        filename = f'{save_dir}/{param}_{metric}.png'
+        plt.savefig(filename)
+        plt.close()
 
 def remove_stop_words(df):
     ## Delete more stop words
@@ -153,3 +174,74 @@ for word in technical_skills:
         print("No", word, "available \n")
 
 
+# Parameter grid
+param_grid = {
+    'vector_size': [50, 100, 200],
+    'window': [3, 5, 10],
+    'min_count': [1, 2, 5],
+    'sg': [0, 1],  # 0 for CBOW, 1 for Skip-gram
+    'hs': [0, 1],  # 0 for negative sampling, 1 for hierarchical softmax
+    'negative': [5, 10, 15],  # Number of negative samples if hs=0
+    'epochs': [10, 20, 30]  # Number of training epochs
+}
+
+# Store results
+results = []
+
+# Train and evaluate models
+for vector_size in param_grid['vector_size']:
+    for window in param_grid['window']:
+        for min_count in param_grid['min_count']:
+            for sg in param_grid['sg']:
+                for hs in param_grid['hs']:
+                    for negative in param_grid['negative']:
+                        for epochs in param_grid['epochs']:
+                            if hs == 1 and negative > 0:
+                                continue  # Skip incompatible combinations
+                            model = Word2Vec(
+                                df['tokenized_description'],
+                                vector_size=vector_size,
+                                window=window,
+                                min_count=min_count,
+                                sg=sg,
+                                hs=hs,
+                                negative=negative,
+                                epochs=epochs,
+                                workers=4
+                            )
+                            
+                            # Convert descriptions to average word vectors
+                            df['average_word_vector'] = df['tokenized_description'].apply(lambda x: get_average_word_vector(x, model, vector_size))
+                            X = np.vstack(df['average_word_vector'].values)
+                            y = df['Industry']
+                            
+                            # Split data into train and test sets
+                            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+                            
+                            # Train a classifier
+                            clf = LogisticRegression(max_iter=1000)
+                            clf.fit(X_train, y_train)
+                            
+                            # Predict and evaluate
+                            y_pred = clf.predict(X_test)
+                            accuracy = accuracy_score(y_test, y_pred)
+                            f1 = f1_score(y_test, y_pred, average='weighted')
+                            
+                            results.append({
+                                'vector_size': vector_size,
+                                'window': window,
+                                'min_count': min_count,
+                                'sg': sg,
+                                'hs': hs,
+                                'negative': negative,
+                                'epochs': epochs,
+                                'accuracy': accuracy,
+                                'f1_score': f1
+                            })
+
+# Convert results to DataFrame
+results_df = pd.DataFrame(results)
+
+# Plot results for accuracy and F1 score
+plot_results(results_df, 'accuracy')
+plot_results(results_df, 'f1_score')
